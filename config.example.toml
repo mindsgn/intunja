@@ -1,0 +1,94 @@
+# Intunja Client Configuration
+# Edit this file to customize client behavior
+
+[general]
+# Download directory for completed files
+download_dir = ~/Downloads
+
+# Port for incoming peer connections (6881-6889 standard range)
+listen_port = 6881
+
+# Maximum number of simultaneous peer connections
+max_peers = 50
+
+# Enable DHT for trackerless torrents
+enable_dht = true
+
+# Enable PEX (peer exchange)
+enable_pex = true
+
+# Enable LSD (local service discovery)
+enable_lsd = true
+
+[bandwidth]
+# Maximum download speed in KB/s (0 = unlimited)
+max_download_speed = 0
+
+# Maximum upload speed in KB/s (0 = unlimited)
+max_upload_speed = 0
+
+# Upload/download ratio limit (0 = no limit)
+# Example: 2.0 means upload 2x what you download
+share_ratio_limit = 0.0
+
+[storage]
+# Pre-allocate disk space using sparse files
+use_sparse_files = true
+
+# Number of pieces to buffer before flushing to disk
+write_buffer_size = 10
+
+# Enable piece caching for faster uploads
+enable_piece_cache = true
+
+# Maximum cache size in MB
+max_cache_size = 100
+
+[advanced]
+# Enable sequential mode by default (useful for streaming)
+sequential_mode = false
+
+# Request pipeline depth (concurrent requests per peer)
+pipeline_depth = 5
+
+# Block size for piece subdivision (bytes)
+block_size = 16384
+
+# Timeout for tracker announces (seconds)
+tracker_timeout = 15
+
+# Timeout for peer connections (seconds)
+peer_timeout = 5
+
+# Interval between statistics updates (seconds)
+stats_update_interval = 1
+
+[search]
+# Jackett API URL for integrated search
+jackett_url = http://localhost:9117
+
+# Jackett API key
+jackett_api_key = 
+
+# Enable integrated search feature
+enable_search = false
+
+[ui]
+# Terminal UI theme (default, monokai, dracula)
+tui_theme = default
+
+# Show detailed peer information
+show_peer_details = true
+
+# Refresh rate for UI updates (milliseconds)
+ui_refresh_rate = 1000
+
+[logging]
+# Log level (debug, info, warn, error)
+log_level = info
+
+# Log file path (empty = stdout only)
+log_file = 
+
+# Enable verbose protocol logging
+verbose_protocol = false

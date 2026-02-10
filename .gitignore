@@ -1,0 +1,60 @@
+# Binaries
+bittorrent-client
+bittorrent-client-*
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output directories
+dist/
+downloads/
+output/
+
+# Go workspace file
+go.work
+
+# Configuration
+config.toml
+*.local.toml
+
+# Torrent files (don't commit .torrent files)
+*.torrent
+
+# Download data
+*.part
+*.tmp
+
+# Mobile builds
+*.aar
+*.framework
+*.xcframework
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Coverage
+*.out
+coverage.html
+
+# Node modules (if using any JS tools)
+node_modules/
+
+# Temporary files
+tmp/
+temp/
