@@ -82,22 +82,23 @@ func runDaemon(metaInfo *engine.MetaInfo) {
 
 // runTUI runs the client with the Bubble Tea interface
 func runTUI(metaInfo *engine.MetaInfo) {
-	// Create TUI model
-	model := tui.NewModel()
-
 	// Create download manager
 	manager := engine.NewDownloadManager(metaInfo, "./downloads")
 
-	// Start download in background
+	// Create TUI model and program
+	model := tui.NewModel()
+	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	// Start download in background and send message to TUI
 	go func() {
 		if err := manager.Start(); err != nil {
 			fmt.Printf("Error starting download: %v\n", err)
 			os.Exit(1)
 		}
 	}()
+	p.Send(tui.AddTorrentMsg(manager))
 
 	// Run TUI
-	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running TUI: %v\n", err)
 		os.Exit(1)

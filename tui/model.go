@@ -11,7 +11,6 @@ import (
 	"github.com/mindsgn-studio/intunja/engine"
 )
 
-// View types
 type viewType int
 
 const (
@@ -21,7 +20,6 @@ const (
 	viewSearch
 )
 
-// TorrentState represents the state of a torrent
 type TorrentState struct {
 	MetaInfo   *engine.MetaInfo
 	Manager    *engine.DownloadManager
@@ -29,7 +27,7 @@ type TorrentState struct {
 	Downloaded int64
 	Uploaded   int64
 	Peers      int
-	Status     string // "downloading", "paused", "seeding", "stopped"
+	Status     string
 }
 
 // Model is the main TUI model
@@ -160,8 +158,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateTorrentStats()
 		return m, tickCmd()
 
-	case addTorrentMsg:
-		return m.handleAddTorrent(msg)
+	case AddTorrentMsg:
+		return m.handleAddTorrent(msg) //nolint:forcetypeassert
 	}
 
 	// Update active component
@@ -192,10 +190,9 @@ func (m Model) View() string {
 
 // renderMainView renders the main torrent list
 func (m Model) renderMainView() string {
-	title := m.styles.Title.Render("🌊 BitTorrent Client")
+	title := m.styles.Title.Render("🌊 Intunja")
 	subtitle := m.styles.Subtitle.Render(fmt.Sprintf("Active torrents: %d", len(m.torrents)))
 
-	// Update table rows
 	rows := make([]table.Row, len(m.torrents))
 	for i, t := range m.torrents {
 		rows[i] = table.Row{
@@ -356,11 +353,10 @@ func (m *Model) updateTorrentStats() {
 }
 
 // Messages
-type tickMsg time.Time
-type addTorrentMsg struct {
-	metaInfo *engine.MetaInfo
-	manager  *engine.DownloadManager
-}
+type tickMsg time.Time //nolint:unused
+
+// AddTorrentMsg is a message to add a new torrent to the TUI
+type AddTorrentMsg *engine.DownloadManager
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
@@ -368,17 +364,17 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-func (m Model) handleAddTorrent(msg addTorrentMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleAddTorrent(msg AddTorrentMsg) (tea.Model, tea.Cmd) {
+	manager := (*engine.DownloadManager)(msg)
 	t := &TorrentState{
-		MetaInfo: msg.metaInfo,
-		Manager:  msg.manager,
+		MetaInfo: manager.MetaInfo(),
+		Manager:  manager,
 		Status:   "downloading",
 	}
 	m.torrents = append(m.torrents, t)
 	return m, nil
 }
 
-// Utility functions
 func formatBytes(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {

@@ -326,3 +326,8 @@ func (dm *DownloadManager) GetStats() (downloaded, uploaded int64, numPeers int)
 
 	return dm.totalDownloaded, dm.totalUploaded, len(dm.peers)
 }
+
+// MetaInfo returns the metainfo for the torrent.
+func (dm *DownloadManager) MetaInfo() *MetaInfo {
+	return dm.metaInfo
+}
