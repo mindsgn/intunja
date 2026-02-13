@@ -1,7 +1,7 @@
 {
   "AutoStart": true,
   "DisableEncryption": false,
-  "DownloadDirectory": "/Users/sibongiseni/projects/intunja/core/downloads",
+  "DownloadDirectory": "~/downloads",
   "EnableUpload": true,
   "EnableSeeding": true,
   "IncomingPort": 50007
