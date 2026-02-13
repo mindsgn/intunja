@@ -61,6 +61,23 @@ go build -o intunja
 ./intunja
 ```
 
+## 🤖 Headless / Non-interactive Mode
+
+For automated tests or CI you can run a non-interactive "headless" mode which
+does not take control of the terminal. It prints a simple summary of the
+engine state every second.
+
+```bash
+# Run headless mode (will detect and use a running daemon if available)
+./intunja headless
+
+# Stop with Ctrl+C
+```
+
+The headless mode will use the remote daemon if one is running (it checks
+`/tmp/intunja-daemon.pid` to determine that). Otherwise it will start a local
+engine instance in-process.
+
 ### First Launch
 
 1. The application will create a `downloads` directory in the current folder
@@ -365,19 +382,19 @@ For optimal connectivity, configure port forwarding on your router:
 
 ## 🗺️ Roadmap
 
-### Version 2.1
+### Version 0.0.2
 - [ ] Bandwidth throttling (max upload/download speed)
 - [ ] Per-file priority selection
 - [ ] Watch folder for auto-adding torrents
 - [ ] Import/export torrent list
 
-### Version 2.2
+### Version 0.0.3
 - [ ] RSS feed monitoring
 - [ ] Scheduled downloads (start/stop at specific times)
 - [ ] Remote control via REST API
 - [ ] Plugin system for custom scrapers
 
-### Version 3.0
+### Version 0.0.4
 - [ ] Web UI (bring back web interface as optional)
 - [ ] Mobile app (Android/iOS)
 - [ ] Cloud sync of torrent list
@@ -406,9 +423,6 @@ cd intunja
 go mod download
 
 # Run tests
-go test ./...
-
-# Build
 go build -o intunja
 
 # Run
@@ -434,9 +448,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/intunja/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/intunja/discussions)
-- **Email**: support@example.com
 
 ---
 
@@ -476,8 +487,7 @@ A: Select the torrent and press `s`. If it was deleted, you'll need to re-add it
 A: By default in `./downloads` relative to where you run the binary. Check with `c` (config view).
 
 **Q: Can I import torrents from another client?**  
-A: Not directly. You'll need to re-add them via magnet links or .torrent files.
-
+A: Not directly. You'll need to re-add them via magnet links or .torrent files.  
 ---
 
 **Made with ❤️ by the Intunja team**
