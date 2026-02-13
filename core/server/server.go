@@ -233,6 +233,22 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	//api call
 	if strings.HasPrefix(r.URL.Path, "/api/") {
+		// Expose a simple GET endpoint for torrent list
+		if r.Method == "GET" && r.URL.Path == "/api/torrents" {
+			s.state.Lock()
+			ts := s.state.Torrents
+			s.state.Unlock()
+			b, err := json.Marshal(ts)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(err.Error()))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(b)
+			return
+		}
 		//only pass request in, expect error out
 		if err := s.api(r); err == nil {
 			w.WriteHeader(http.StatusOK)

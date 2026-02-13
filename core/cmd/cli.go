@@ -2,9 +2,14 @@ package cmd
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -14,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/mindsgn-studio/intunja/core/engine"
+	"github.com/mindsgn-studio/intunja/core/server"
 )
 
 // View types
@@ -29,7 +35,7 @@ const (
 // Model represents the CLI application state
 type Model struct {
 	// Engine
-	engine *engine.Engine
+	engine engine.EngineInterface
 
 	// UI State
 	currentView viewType
@@ -98,7 +104,7 @@ func defaultStyles() Styles {
 }
 
 // NewModel creates a new CLI model
-func NewModel(e *engine.Engine) Model {
+func NewModel(e engine.EngineInterface) Model {
 	// Create table
 	columns := []table.Column{
 		{Title: "Name", Width: 40},
@@ -625,8 +631,103 @@ func truncate(s string, max int) string {
 	return s[:max-3] + "..."
 }
 
-func Run(configPath string) error {
-	e := engine.New()
+func Run(configPath string, version string) error {
+	// Support daemon subcommands: daemon start|stop|status|run
+	if len(os.Args) >= 2 && os.Args[1] == "daemon" {
+		if len(os.Args) >= 3 {
+			switch os.Args[2] {
+			case "start":
+				if err := daemonStart(); err != nil {
+					return fmt.Errorf("failed to start daemon: %w", err)
+				}
+				fmt.Println("daemon started")
+				return nil
+			case "stop":
+				if err := daemonStop(); err != nil {
+					return fmt.Errorf("failed to stop daemon: %w", err)
+				}
+				fmt.Println("daemon stopped")
+				return nil
+			case "status":
+				alive, pid := daemonStatus()
+				if pid == 0 {
+					fmt.Println("no daemon pid file")
+				} else if alive {
+					fmt.Printf("daemon running (pid=%d)\n", pid)
+				} else {
+					fmt.Printf("daemon not running (stale pid=%d)\n", pid)
+				}
+				return nil
+			case "run":
+				// Run server in foreground (daemon child)
+				s := &server.Server{Port: 8080, Open: false, ConfigPath: configPath}
+				return s.Run(version)
+			default:
+				return fmt.Errorf("unknown daemon subcommand: %s", os.Args[2])
+			}
+		}
+		return fmt.Errorf("missing daemon subcommand: start|stop|status|run")
+	}
+	// Provide a headless (non-interactive) mode for automated tests:
+	// `./intunja headless` will run a simple loop that fetches torrent state
+	// from local or remote engine and prints a summary. It does not take
+	// control of the terminal.
+	if len(os.Args) >= 2 && os.Args[1] == "headless" {
+		var e engine.EngineInterface
+		if alive, _ := daemonStatus(); alive {
+			e = engine.NewRemoteEngine("http://localhost:8080")
+		} else {
+			e = engine.New()
+		}
+
+		config := engine.Config{
+			AutoStart:         true,
+			DisableEncryption: false,
+			DownloadDirectory: "./downloads",
+			EnableUpload:      true,
+			EnableSeeding:     true,
+			IncomingPort:      50007,
+		}
+
+		if _, ok := e.(*engine.RemoteEngine); !ok {
+			if err := e.Configure(config); err != nil {
+				return fmt.Errorf("failed to configure engine: %w", err)
+			}
+		} else {
+			if err := e.Configure(config); err != nil {
+				return fmt.Errorf("failed to configure remote engine: %w", err)
+			}
+		}
+
+		sigc := make(chan os.Signal, 1)
+		signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		fmt.Println("headless mode started; press Ctrl+C to stop")
+		for {
+			select {
+			case <-ticker.C:
+				ts := e.GetTorrents()
+				if ts == nil {
+					fmt.Println(time.Now().Format(time.RFC3339), "torrents=0")
+				} else {
+					fmt.Println(time.Now().Format(time.RFC3339), "torrents=", len(ts))
+				}
+			case <-sigc:
+				fmt.Println("headless mode stopping")
+				return nil
+			}
+		}
+	}
+
+	// If daemon running, use remote engine proxy to avoid binding ports locally
+	var e engine.EngineInterface
+	if alive, _ := daemonStatus(); alive {
+		// remote server listens on http://localhost:8080 (daemon run uses 8080)
+		e = engine.NewRemoteEngine("http://localhost:8080")
+	} else {
+		e = engine.New()
+	}
 
 	config := engine.Config{
 		AutoStart:         true,
@@ -641,8 +742,16 @@ func Run(configPath string) error {
 		return fmt.Errorf("failed to create download directory: %w", err)
 	}
 
-	if err := e.Configure(config); err != nil {
-		return fmt.Errorf("failed to configure engine: %w", err)
+	// Only configure local engine; remote engine will forward configure calls
+	if _, ok := e.(*engine.RemoteEngine); !ok {
+		if err := e.Configure(config); err != nil {
+			return fmt.Errorf("failed to configure engine: %w", err)
+		}
+	} else {
+		// send configuration to remote daemon
+		if err := e.Configure(config); err != nil {
+			return fmt.Errorf("failed to configure remote engine: %w", err)
+		}
 	}
 
 	model := NewModel(e)
@@ -653,4 +762,81 @@ func Run(configPath string) error {
 	}
 
 	return nil
+}
+
+func pidFilePath() string {
+	return filepath.Join(os.TempDir(), "intunja-daemon.pid")
+}
+
+func daemonStart() error {
+	pidfile := pidFilePath()
+	if b, err := ioutil.ReadFile(pidfile); err == nil && len(b) > 0 {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+			if p, err := os.FindProcess(pid); err == nil {
+				// try signal 0
+				if err := p.Signal(syscall.Signal(0)); err == nil {
+					return fmt.Errorf("daemon already running (pid=%d)", pid)
+				}
+			}
+		}
+	}
+
+	cmd := exec.Command(os.Args[0], "daemon", "run")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	pid := cmd.Process.Pid
+	if err := ioutil.WriteFile(pidfile, []byte(strconv.Itoa(pid)), 0644); err != nil {
+		return err
+	}
+	return nil
+}
+
+func daemonStop() error {
+	pidfile := pidFilePath()
+	b, err := ioutil.ReadFile(pidfile)
+	if err != nil {
+		return fmt.Errorf("pid file not found")
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return err
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	// send SIGTERM
+	if err := p.Signal(syscall.SIGTERM); err != nil {
+		return err
+	}
+	// remove pidfile
+	_ = os.Remove(pidfile)
+	return nil
+}
+
+func daemonStatus() (bool, int) {
+	pidfile := pidFilePath()
+	b, err := ioutil.ReadFile(pidfile)
+	if err != nil {
+		return false, 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return false, 0
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false, pid
+	}
+	if err := p.Signal(syscall.Signal(0)); err != nil {
+		return false, pid
+	}
+	return true, pid
 }

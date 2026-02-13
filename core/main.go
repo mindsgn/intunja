@@ -8,7 +8,7 @@ import (
 	"github.com/mindsgn-studio/intunja/core/cmd"
 )
 
-const version = "2.0.0"
+const version = "0.0.1"
 
 func main() {
 	configPath := flag.String("config", "config.json", "Path to configuration file")
@@ -21,7 +21,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	if err := cmd.Run(*configPath); err != nil {
+	if err := cmd.Run(*configPath, version); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
