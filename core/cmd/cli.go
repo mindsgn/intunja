@@ -186,8 +186,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.currentView == viewMain {
+		// Update table and sync cursor position
 		m.mainTable, cmd = m.mainTable.Update(msg)
-		m.selectedIdx = m.mainTable.Cursor()
+
+		// Get cursor from table and ensure it's valid
+		cursor := m.mainTable.Cursor()
+		if cursor >= 0 && cursor < len(m.torrentKeys) {
+			m.selectedIdx = cursor
+		} else if len(m.torrentKeys) > 0 {
+			// Cursor out of bounds, reset to valid position
+			m.selectedIdx = 0
+			m.mainTable.SetCursor(0)
+		} else {
+			// No torrents
+			m.selectedIdx = 0
+		}
+
 		return m, cmd
 	}
 
@@ -212,9 +226,8 @@ func (m Model) View() string {
 	}
 }
 
-// renderMainView renders the main torrent list
 func (m Model) renderMainView() string {
-	title := m.styles.Title.Render("🌊 Intunja - BitTorrent CLI Client")
+	title := m.styles.Title.Render("🌊 Intunja: V0.0.1")
 
 	config := m.engine.Config()
 	subtitle := m.styles.Subtitle.Render(fmt.Sprintf(
@@ -224,7 +237,7 @@ func (m Model) renderMainView() string {
 		config.IncomingPort,
 	))
 
-	// Update table rows - with nil checking
+	// Build table rows with safety checks
 	rows := make([]table.Row, 0, len(m.torrentKeys))
 	for _, key := range m.torrentKeys {
 		t := m.torrents[key]
@@ -249,9 +262,17 @@ func (m Model) renderMainView() string {
 			status,
 		})
 	}
+
+	// Always set rows (even if empty)
 	m.mainTable.SetRows(rows)
 
 	tableView := m.mainTable.View()
+
+	// Show message if no torrents
+	emptyMsg := ""
+	if len(rows) == 0 {
+		emptyMsg = m.styles.Subtitle.Render("\nNo active torrents. Press [m] to add a magnet link or [a] to add a torrent file.\n")
+	}
 
 	// Status message
 	status := ""
@@ -267,6 +288,7 @@ func (m Model) renderMainView() string {
 		lipgloss.Left,
 		title,
 		subtitle,
+		emptyMsg,
 		"",
 		tableView,
 		"",
@@ -277,8 +299,9 @@ func (m Model) renderMainView() string {
 
 // renderDetailsView shows detailed info for selected torrent
 func (m Model) renderDetailsView() string {
-	if m.selectedIdx >= len(m.torrentKeys) {
-		return "No torrent selected"
+	// Validate selection bounds
+	if m.selectedIdx < 0 || m.selectedIdx >= len(m.torrentKeys) {
+		return m.styles.Error.Render("No torrent selected\n\nPress [Esc] to go back")
 	}
 
 	key := m.torrentKeys[m.selectedIdx]
@@ -412,14 +435,14 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case "enter":
-		if m.currentView == viewMain && len(m.torrentKeys) > 0 {
+		if m.currentView == viewMain && len(m.torrentKeys) > 0 && m.selectedIdx >= 0 && m.selectedIdx < len(m.torrentKeys) {
 			m.currentView = viewTorrentDetails
 		}
 		return m, nil
 
 	case "s":
 		// Start torrent
-		if m.selectedIdx < len(m.torrentKeys) {
+		if len(m.torrentKeys) > 0 && m.selectedIdx >= 0 && m.selectedIdx < len(m.torrentKeys) {
 			key := m.torrentKeys[m.selectedIdx]
 			t := m.torrents[key]
 			if t != nil {
@@ -436,7 +459,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "p":
 		// Pause torrent
-		if m.selectedIdx < len(m.torrentKeys) {
+		if len(m.torrentKeys) > 0 && m.selectedIdx >= 0 && m.selectedIdx < len(m.torrentKeys) {
 			key := m.torrentKeys[m.selectedIdx]
 			t := m.torrents[key]
 			if t != nil {
@@ -453,7 +476,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "d":
 		// Delete torrent
-		if m.selectedIdx < len(m.torrentKeys) {
+		if len(m.torrentKeys) > 0 && m.selectedIdx >= 0 && m.selectedIdx < len(m.torrentKeys) {
 			key := m.torrentKeys[m.selectedIdx]
 			t := m.torrents[key]
 			if t != nil {
@@ -465,10 +488,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.statusMsg = fmt.Sprintf("Deleted: %s", truncate(torrentName, 40))
 					m.statusStyle = m.styles.Success
 
-					// Adjust selection after deletion
-					if m.selectedIdx >= len(m.torrentKeys)-1 && m.selectedIdx > 0 {
-						m.selectedIdx--
-					}
+					// Force immediate update to refresh torrent list
+					m.updateTorrentStats()
 				}
 			}
 		}
@@ -512,7 +533,6 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, textinput.Blink
 			}
 
-			// Add magnet link
 			if err := m.engine.NewMagnet(value); err != nil {
 				m.statusMsg = fmt.Sprintf("Error adding magnet: %v", err)
 				m.statusStyle = m.styles.Error
@@ -525,7 +545,6 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusStyle = m.styles.Success
 
 		} else if strings.Contains(m.inputPrompt, "torrent") {
-			// Validate file exists
 			if _, err := os.Stat(value); os.IsNotExist(err) {
 				m.statusMsg = fmt.Sprintf("File not found: %s", value)
 				m.statusStyle = m.styles.Error
@@ -534,8 +553,6 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, textinput.Blink
 			}
 
-			// Read and add torrent file
-			// Note: This requires implementing torrent file reading
 			m.statusMsg = "Torrent file support coming soon"
 			m.statusStyle = m.styles.Error
 		}
@@ -552,37 +569,34 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	// Let textinput handle all other input (including paste)
 	var cmd tea.Cmd
 	m.textInput, cmd = m.textInput.Update(msg)
 	return m, cmd
 }
 
-// updateTorrentStats updates torrent statistics
 func (m *Model) updateTorrentStats() {
 	m.torrents = m.engine.GetTorrents()
 
-	// Update ordered keys - remove deleted torrents
 	newKeys := make([]string, 0, len(m.torrents))
 	for key := range m.torrents {
 		newKeys = append(newKeys, key)
 	}
 	m.torrentKeys = newKeys
 
-	// Adjust selection to stay in bounds
 	if len(m.torrentKeys) == 0 {
 		m.selectedIdx = 0
-	} else if m.selectedIdx >= len(m.torrentKeys) {
-		m.selectedIdx = len(m.torrentKeys) - 1
-	}
+		m.mainTable.SetCursor(0)
+	} else {
+		if m.selectedIdx < 0 {
+			m.selectedIdx = 0
+		} else if m.selectedIdx >= len(m.torrentKeys) {
+			m.selectedIdx = len(m.torrentKeys) - 1
+		}
 
-	// Update table cursor position
-	if m.selectedIdx >= 0 && m.selectedIdx < len(m.torrentKeys) {
 		m.mainTable.SetCursor(m.selectedIdx)
 	}
 }
 
-// Messages
 type tickMsg time.Time
 
 func tickCmd() tea.Cmd {
@@ -591,7 +605,6 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-// Utility functions
 func formatBytes(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -612,12 +625,9 @@ func truncate(s string, max int) string {
 	return s[:max-3] + "..."
 }
 
-// Run starts the CLI application
 func Run(configPath string) error {
-	// Initialize engine
 	e := engine.New()
 
-	// Configure engine
 	config := engine.Config{
 		AutoStart:         true,
 		DisableEncryption: false,
@@ -627,17 +637,14 @@ func Run(configPath string) error {
 		IncomingPort:      50007,
 	}
 
-	// Create download directory if it doesn't exist
 	if err := os.MkdirAll(config.DownloadDirectory, 0755); err != nil {
 		return fmt.Errorf("failed to create download directory: %w", err)
 	}
 
-	// Configure engine
 	if err := e.Configure(config); err != nil {
 		return fmt.Errorf("failed to configure engine: %w", err)
 	}
 
-	// Create and run TUI
 	model := NewModel(e)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 

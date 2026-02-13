@@ -1,60 +1,43 @@
-# Binaries
-bittorrent-client
-bittorrent-client-*
-*.exe
-*.dll
-*.so
-*.dylib
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
-# Test binary
-*.test
-
-# Output directories
-dist/
-downloads/
-output/
-
-# Go workspace file
-go.work
-
-# Configuration
-config.toml
-*.local.toml
-
-# Torrent files (don't commit .torrent files)
-*.torrent
-
-# Download data
-*.part
-*.tmp
-
-# Mobile builds
-*.aar
-*.framework
-*.xcframework
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Coverage
-*.out
-coverage.html
-
-# Node modules (if using any JS tools)
+# dependencies
 node_modules/
+app/
+core/
 
-# Temporary files
-tmp/
-temp/
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android

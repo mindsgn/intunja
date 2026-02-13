@@ -17,7 +17,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("Intunja BitTorrent CLI v%s\n", version)
+		fmt.Printf("Intunja v%s\n", version)
 		os.Exit(0)
 	}
 
