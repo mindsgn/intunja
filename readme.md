@@ -2,7 +2,7 @@
 
 A powerful, terminal-based BitTorrent client built with Go and Bubble Tea. Originally a web-based application, now refactored into a beautiful CLI experience.
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)
 ![Go](https://img.shields.io/badge/Go-1.21+-00ADD8.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -490,4 +490,4 @@ A: By default in `./downloads` relative to where you run the binary. Check with 
 A: Not directly. You'll need to re-add them via magnet links or .torrent files.  
 ---
 
-**Made with ❤️ by the Intunja team**
+**Made with ❤️ by the MINDSGN STUDIO (PTY) LTD**
