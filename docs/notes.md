@@ -398,6 +398,79 @@ Lock mutex
     ↓
 For each torrent in client.Torrents():
     ↓
+
+## Notes — 2026-02-15
+
+### 1) Plan: Fix crash "unknown scheme" when adding torrents
+
+Summary:
+- The panic originates inside `anacrolix/torrent` while initializing tracker clients for tracker URLs with an unsupported or empty scheme. We must both prevent invalid input reaching the library and harden runtime behavior so a single bad tracker or torrent cannot crash the whole TUI.
+
+Steps (short-term - immediate):
+1. Add a defensive input validation layer before calling `engine.NewMagnet` / `client.AddMagnet`:
+    - Validate magnet URIs with a small whitelist of supported schemes (`magnet`), parse trackers extracted from magnet info if present, and ignore or sanitize tracker URLs missing schemes.
+2. Catch and convert panics coming from the torrent library at the engine boundary:
+    - Wrap calls that can panic (e.g., `AddMagnet`, `AddTorrentSpec`) in a deferred recover that logs the stack and returns a descriptive error to the caller instead of letting the panic crash the process.
+3. Prevent the Bubble Tea TUI from crashing on engine-level panics by ensuring `Model` operations that call engine methods handle returned errors gracefully and surface them to the UI (status bar) rather than letting them bubble up.
+4. Add telemetry/logging when a sanitized/ignored tracker or malformed magnet link is detected so users can be informed and developers can gather repro samples.
+
+Steps (long-term - robust fix):
+1. Harden the engine to validate and normalize tracker URLs when reading `.torrent` or magnet metadata; drop invalid trackers early and continue with the rest.
+2. Add unit tests and fuzzing for magnet parsing and tracker normalization to catch malformed trackers prior to runtime.
+3. Contribute a small fix or defensive check upstream to `anacrolix/torrent` (if applicable), or wrap the track initialization path to ignore unsupported schemes.
+4. Establish an error isolation policy: failures in tracker scraping or a specific torrent must not destabilize the client; implement timeouts and circuit-breaker patterns per tracker.
+
+Acceptance criteria:
+- Exploit that previously caused "unknown scheme" no longer crashes the TUI.
+- The TUI shows a clear error message when a magnet or tracker is rejected.
+- Logs contain sufficient context for reproducing the malformed input.
+
+### 2) Plan: Add SQLite persistence so crashes/resets can resume where left off
+
+Goals:
+- Persist minimal engine and torrent state to durable storage so the app can restart and continue downloads or at least restore visible state without re-adding torrents manually.
+- Keep on-disk representation compact, robust to crashes, and consistent with `anacrolix/torrent` state where feasible.
+
+Design considerations:
+- What to persist: torrent infohashes, magnet URIs or cached `.torrent` files, per-torrent desired state (started/stopped), per-file selection if used, download directory, and minimal progress checkpoints (prefer relying on anacrolix's piece cache on disk when possible).
+- Where to persist: use a single SQLite database file in the app data directory (e.g., `${XDG_DATA_HOME}/intunja/state.db` or platform-specific app files dir). Include a `schema_version` table for migrations.
+- Concurrency: engine uses a mutex; persistence operations should not hold the global engine lock for long. Use background worker goroutine(s) to write snapshots.
+
+High-level schema (starter):
+1. `meta` table: key/value (app version, schema_version, last_shutdown)
+2. `torrents` table: id (infohash primary key), name, magnet_uri (nullable), torrent_path (nullable, path to cached .torrent), desired_state (enum: stopped, started), added_at, updated_at
+3. `files` table (optional): id, torrent_id (fk), path, size, selected (bool)
+
+Persistence strategy:
+1. On torrent add (magnet or file): insert or upsert into `torrents`. If a `.torrent` file is available, save a copy in `cache/` and store path.
+2. On user actions (start/stop/delete): update `desired_state` immediately in DB and enqueue an async sync to disk if not completed.
+3. Periodic snapshot: every N seconds (e.g., 10s) write last-seen progress metadata for quick UI restore. Keep snapshot writes coalesced to avoid I/O storms.
+4. On clean shutdown: write `last_shutdown = graceful` and flush in-memory queues.
+5. On startup: read DB, rehydrate `Engine.ts` by re-adding torrents in the order they were added and applying `desired_state` for each (start those with desired_state=start). For magnets, call `NewMagnet` with stored URI; for cached .torrent, call `NewTorrent` using stored file.
+
+Transactionality & recovery:
+- Use SQLite transactions for multi-row updates (e.g., when deleting a torrent and its files). Keep schema migrations idempotent.
+- Use WAL mode for better crash resilience and concurrency.
+
+Concurrency & performance:
+- Use a dedicated persistence goroutine with a channel queue to receive write requests (upsert, delete, snapshot). This avoids blocking engine operations and centralizes DB access.
+- For reads (startup and UI), allow concurrent read transactions; for writes, channelize through the persister to serialize updates.
+
+Testing & migration:
+1. Write unit tests for DB layer: schema creation, basic CRUD, migrations.
+2. Integration test: simulate abrupt process kill during a write and verify DB is consistent on restart.
+3. Provide migration path and small tooling (SQL or Go migrator) for future schema changes.
+
+Acceptance criteria:
+- On restart after a crash, the app re-adds previously known torrents and resumes those with desired_state=start (or at least shows them in UI).
+- DB schema is versioned and migratable.
+- Persistence does not add noticeable latency to UI operations.
+
+Notes and next tasks:
+- Implement defensive panic recovery around engine library calls as a priority (see plan 1) before adding persistence.
+- After implementing persistence, consider saving more detailed runtime state (piece map) only if `anacrolix/torrent` cannot recover from disk cache alone.
+- Add a small CLI command to export/import the SQLite DB for backup or migration.
+
     upsertTorrent(tt)
         ↓
         Find or create *Torrent in map
