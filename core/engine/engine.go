@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -97,28 +98,42 @@ func (e *Engine) RehydrateFromPersister() {
 	}
 	rows, err := p.GetAllTorrents()
 	if err != nil {
-		fmt.Printf("rehydrate: failed to read persisted torrents: %v\n", err)
+		log.Printf("rehydrate: failed to read persisted torrents: %v", err)
 		return
 	}
 	for _, r := range rows {
 		magnet := r["magnet"]
 		infohash := r["infohash"]
 		desired := r["desired_state"]
+		torrentPath := r["torrent_path"]
 		if magnet != "" {
 			// sanitize and add
 			san, _, err := SanitizeMagnet(magnet)
 			if err != nil {
-				fmt.Printf("rehydrate: invalid magnet for %s: %v\n", infohash, err)
+				log.Printf("rehydrate: invalid magnet for %s: %v", infohash, err)
 				continue
 			}
-			if err := e.NewMagnet(san); err != nil {
-				fmt.Printf("rehydrate: failed to add magnet %s: %v\n", infohash, err)
+			// directly add magnet and control desired start
+			tt, err := e.client.AddMagnet(san)
+			if err != nil {
+				log.Printf("rehydrate: failed to add magnet %s: %v", infohash, err)
 				continue
 			}
-			// If desired state is started and AutoStart is false, ensure start after info arrives.
-			if desired == "started" && !e.config.AutoStart {
-				// start will be attempted by the newTorrent goroutine when GotInfo fires
+			if err := e.newTorrent(tt, desired == "started"); err != nil {
+				log.Printf("rehydrate: failed to register magnet %s: %v", infohash, err)
+				continue
 			}
+			// proceed to next persisted row
+			continue
+		}
+		// attempt to restore from a stored .torrent file path
+		if torrentPath != "" {
+			// Adding from a .torrent file is not implemented in rehydration yet.
+			// Implementing this requires constructing a torrent spec from the
+			// .torrent meta-info and calling client.AddTorrentSpec, which
+			// depends on the anacrolix API. We'll skip for now and log.
+			log.Printf("rehydrate: skipping torrent file restore for %s (path=%s)", infohash, torrentPath)
+			continue
 		}
 		// TODO: support torrent_path restore
 		_ = infohash
@@ -187,7 +202,7 @@ func (e *Engine) NewMagnet(magnetURI string) error {
 	if err != nil {
 		return err
 	}
-	if err := e.newTorrent(tt); err != nil {
+	if err := e.newTorrent(tt, e.config.AutoStart); err != nil {
 		return err
 	}
 	// persist metadata (magnet) if available
@@ -216,7 +231,7 @@ func (e *Engine) NewTorrent(spec *torrent.TorrentSpec) error {
 	if err != nil {
 		return err
 	}
-	if err := e.newTorrent(tt); err != nil {
+	if err := e.newTorrent(tt, e.config.AutoStart); err != nil {
 		return err
 	}
 	if e.persister != nil {
@@ -327,11 +342,13 @@ func SanitizeMagnet(m string) (string, []string, error) {
 	return u.String(), dropped, nil
 }
 
-func (e *Engine) newTorrent(tt *torrent.Torrent) error {
+func (e *Engine) newTorrent(tt *torrent.Torrent, desiredStart bool) error {
 	t := e.upsertTorrent(tt)
 	go func() {
 		<-t.t.GotInfo()
-		e.StartTorrent(t.InfoHash)
+		if desiredStart || e.config.AutoStart {
+			e.StartTorrent(t.InfoHash)
+		}
 	}()
 	return nil
 }

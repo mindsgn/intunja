@@ -2,15 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
-	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
@@ -20,7 +15,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/mindsgn-studio/intunja/core/engine"
-	"github.com/mindsgn-studio/intunja/core/server"
 )
 
 // View types
@@ -684,117 +678,124 @@ func truncate(s string, max int) string {
 
 func Run(configPath string, version string) error {
 	// Support daemon subcommands: daemon start|stop|status|run
-	if len(os.Args) >= 2 && os.Args[1] == "daemon" {
-		if len(os.Args) >= 3 {
-			switch os.Args[2] {
-			case "start":
-				if err := daemonStart(); err != nil {
-					return fmt.Errorf("failed to start daemon: %w", err)
+	/*
+		if len(os.Args) >= 2 && os.Args[1] == "daemon" {
+			if len(os.Args) >= 3 {
+				switch os.Args[2] {
+				case "start":
+					if err := daemonStart(); err != nil {
+						return fmt.Errorf("failed to start daemon: %w", err)
+					}
+					fmt.Println("daemon started")
+					return nil
+				case "stop":
+					if err := daemonStop(); err != nil {
+						return fmt.Errorf("failed to stop daemon: %w", err)
+					}
+					fmt.Println("daemon stopped")
+					return nil
+				case "status":
+					alive, pid := daemonStatus()
+					if pid == 0 {
+						fmt.Println("no daemon pid file")
+					} else if alive {
+						fmt.Printf("daemon running (pid=%d)\n", pid)
+					} else {
+						fmt.Printf("daemon not running (stale pid=%d)\n", pid)
+					}
+					return nil
+				case "run":
+					// Run server in foreground (daemon child)
+					s := &server.Server{Port: 8080, Open: false, ConfigPath: configPath}
+					return s.Run(version)
+				default:
+					return fmt.Errorf("unknown daemon subcommand: %s", os.Args[2])
 				}
-				fmt.Println("daemon started")
-				return nil
-			case "stop":
-				if err := daemonStop(); err != nil {
-					return fmt.Errorf("failed to stop daemon: %w", err)
-				}
-				fmt.Println("daemon stopped")
-				return nil
-			case "status":
-				alive, pid := daemonStatus()
-				if pid == 0 {
-					fmt.Println("no daemon pid file")
-				} else if alive {
-					fmt.Printf("daemon running (pid=%d)\n", pid)
-				} else {
-					fmt.Printf("daemon not running (stale pid=%d)\n", pid)
-				}
-				return nil
-			case "run":
-				// Run server in foreground (daemon child)
-				s := &server.Server{Port: 8080, Open: false, ConfigPath: configPath}
-				return s.Run(version)
-			default:
-				return fmt.Errorf("unknown daemon subcommand: %s", os.Args[2])
 			}
+			return fmt.Errorf("missing daemon subcommand: start|stop|status|run")
 		}
-		return fmt.Errorf("missing daemon subcommand: start|stop|status|run")
-	}
+	*/
+
 	// Provide a headless (non-interactive) mode for automated tests:
 	// `./intunja headless` will run a simple loop that fetches torrent state
 	// from local or remote engine and prints a summary. It does not take
 	// control of the terminal.
-	if len(os.Args) >= 2 && os.Args[1] == "headless" {
-		var e engine.EngineInterface
-		if alive, _ := daemonStatus(); alive {
-			e = engine.NewRemoteEngine("http://localhost:8080")
-		} else {
-			e = engine.New()
-		}
-
-		config := engine.Config{
-			AutoStart:         true,
-			DisableEncryption: false,
-			DownloadDirectory: "./downloads",
-			EnableUpload:      true,
-			EnableSeeding:     true,
-			IncomingPort:      50007,
-		}
-
-		if _, ok := e.(*engine.RemoteEngine); !ok {
-			// attach persister (DB file in download dir)
-			dbPath := filepath.Join(config.DownloadDirectory, "intunja.db")
-			if p, err := engine.NewPersister(dbPath); err == nil {
-				e.AttachPersister(p)
-				// configure engine then rehydrate persisted torrents
-				if err := e.Configure(config); err != nil {
-					return fmt.Errorf("failed to configure engine: %w", err)
-				}
-				e.RehydrateFromPersister()
-				defer func() {
-					e.DetachPersister()
-					p.Close()
-				}()
+	/*
+		if len(os.Args) >= 2 && os.Args[1] == "headless" {
+			var e engine.EngineInterface
+			if alive, _ := daemonStatus(); alive {
+				e = engine.NewRemoteEngine("http://localhost:8080")
 			} else {
-				fmt.Printf("warning: could not open persister: %v\n", err)
-				if err := e.Configure(config); err != nil {
-					return fmt.Errorf("failed to configure engine: %w", err)
-				}
+				e = engine.New()
 			}
-		} else {
-			if err := e.Configure(config); err != nil {
-				return fmt.Errorf("failed to configure remote engine: %w", err)
-			}
-		}
 
-		sigc := make(chan os.Signal, 1)
-		signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		fmt.Println("headless mode started; press Ctrl+C to stop")
-		for {
-			select {
-			case <-ticker.C:
-				ts := e.GetTorrents()
-				if ts == nil {
-					fmt.Println(time.Now().Format(time.RFC3339), "torrents=0")
+			config := engine.Config{
+				AutoStart:         true,
+				DisableEncryption: false,
+				DownloadDirectory: "./downloads",
+				EnableUpload:      true,
+				EnableSeeding:     true,
+				IncomingPort:      50007,
+			}
+
+			if _, ok := e.(*engine.RemoteEngine); !ok {
+				// attach persister (DB file in download dir)
+				dbPath := filepath.Join(config.DownloadDirectory, "intunja.db")
+				if p, err := engine.NewPersister(dbPath); err == nil {
+					e.AttachPersister(p)
+					// configure engine then rehydrate persisted torrents
+					if err := e.Configure(config); err != nil {
+						return fmt.Errorf("failed to configure engine: %w", err)
+					}
+					e.RehydrateFromPersister()
+					defer func() {
+						e.DetachPersister()
+						p.Close()
+					}()
 				} else {
-					fmt.Println(time.Now().Format(time.RFC3339), "torrents=", len(ts))
+					fmt.Printf("warning: could not open persister: %v\n", err)
+					if err := e.Configure(config); err != nil {
+						return fmt.Errorf("failed to configure engine: %w", err)
+					}
 				}
-			case <-sigc:
-				fmt.Println("headless mode stopping")
-				return nil
+			} else {
+				if err := e.Configure(config); err != nil {
+					return fmt.Errorf("failed to configure remote engine: %w", err)
+				}
+			}
+
+			sigc := make(chan os.Signal, 1)
+			signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			fmt.Println("headless mode started; press Ctrl+C to stop")
+			for {
+				select {
+				case <-ticker.C:
+					ts := e.GetTorrents()
+					if ts == nil {
+						fmt.Println(time.Now().Format(time.RFC3339), "torrents=0")
+					} else {
+						fmt.Println(time.Now().Format(time.RFC3339), "torrents=", len(ts))
+					}
+				case <-sigc:
+					fmt.Println("headless mode stopping")
+					return nil
+				}
 			}
 		}
-	}
+	*/
 
 	// If daemon running, use remote engine proxy to avoid binding ports locally
 	var e engine.EngineInterface
-	if alive, _ := daemonStatus(); alive {
-		// remote server listens on http://localhost:8080 (daemon run uses 8080)
-		e = engine.NewRemoteEngine("http://localhost:8080")
-	} else {
-		e = engine.New()
-	}
+	/*
+		if alive, _ := daemonStatus(); alive {
+			// remote server listens on http://localhost:8080 (daemon run uses 8080)
+			e = engine.NewRemoteEngine("http://localhost:8080")
+		} else {
+	*/
+	e = engine.New()
+	//}
 
 	config := engine.Config{
 		AutoStart:         true,
@@ -846,6 +847,7 @@ func Run(configPath string, version string) error {
 	return nil
 }
 
+/*
 func pidFilePath() string {
 	return filepath.Join(os.TempDir(), "intunja-daemon.pid")
 }
@@ -922,3 +924,4 @@ func daemonStatus() (bool, int) {
 	}
 	return true, pid
 }
+*/
