@@ -2,9 +2,12 @@ package engine
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,15 +16,124 @@ import (
 )
 
 type Engine struct {
-	mut      sync.Mutex
-	cacheDir string
-	client   *torrent.Client
-	config   Config
-	ts       map[string]*Torrent
+	mut       sync.Mutex
+	cacheDir  string
+	client    *torrent.Client
+	config    Config
+	ts        map[string]*Torrent
+	persister *Persister
+	persistQ  chan persistOp
+	persistWg *sync.WaitGroup
 }
 
 func New() *Engine {
 	return &Engine{ts: map[string]*Torrent{}}
+}
+
+type persistOp struct {
+	Op           string
+	InfoHash     string
+	Name         string
+	Magnet       string
+	TorrentPath  string
+	DesiredState string
+}
+
+// AttachPersister attaches a Persister and starts a background worker
+// to process persistence operations.
+func (e *Engine) AttachPersister(p *Persister) {
+	e.mut.Lock()
+	defer e.mut.Unlock()
+	if p == nil {
+		return
+	}
+	e.persister = p
+	if e.persistQ == nil {
+		e.persistQ = make(chan persistOp, 128)
+		e.persistWg = &sync.WaitGroup{}
+		e.persistWg.Add(1)
+		go func() {
+			defer e.persistWg.Done()
+			for op := range e.persistQ {
+				switch op.Op {
+				case "upsert":
+					if e.persister != nil {
+						_ = e.persister.UpsertTorrent(op.InfoHash, op.Name, op.Magnet, op.TorrentPath, op.DesiredState)
+					}
+				case "delete":
+					if e.persister != nil {
+						_ = e.persister.DeleteTorrent(op.InfoHash)
+					}
+				}
+			}
+		}()
+	}
+}
+
+// DetachPersister gracefully shuts down the persistence worker and clears the persister.
+func (e *Engine) DetachPersister() {
+	e.mut.Lock()
+	ch := e.persistQ
+	wg := e.persistWg
+	e.persistQ = nil
+	e.persistWg = nil
+	e.persister = nil
+	e.mut.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+	if wg != nil {
+		wg.Wait()
+	}
+}
+
+// RehydrateFromPersister loads persisted torrents and re-adds them to the engine.
+func (e *Engine) RehydrateFromPersister() {
+	e.mut.Lock()
+	p := e.persister
+	e.mut.Unlock()
+	if p == nil {
+		return
+	}
+	rows, err := p.GetAllTorrents()
+	if err != nil {
+		fmt.Printf("rehydrate: failed to read persisted torrents: %v\n", err)
+		return
+	}
+	for _, r := range rows {
+		magnet := r["magnet"]
+		infohash := r["infohash"]
+		desired := r["desired_state"]
+		if magnet != "" {
+			// sanitize and add
+			san, _, err := SanitizeMagnet(magnet)
+			if err != nil {
+				fmt.Printf("rehydrate: invalid magnet for %s: %v\n", infohash, err)
+				continue
+			}
+			if err := e.NewMagnet(san); err != nil {
+				fmt.Printf("rehydrate: failed to add magnet %s: %v\n", infohash, err)
+				continue
+			}
+			// If desired state is started and AutoStart is false, ensure start after info arrives.
+			if desired == "started" && !e.config.AutoStart {
+				// start will be attempted by the newTorrent goroutine when GotInfo fires
+			}
+		}
+		// TODO: support torrent_path restore
+		_ = infohash
+	}
+}
+
+func (e *Engine) enqueuePersist(op persistOp) {
+	if e.persistQ == nil {
+		return
+	}
+	select {
+	case e.persistQ <- op:
+	default:
+		// drop if queue is full to avoid blocking
+	}
 }
 
 func (e *Engine) Config() Config {
@@ -57,19 +169,162 @@ func (e *Engine) Configure(c Config) error {
 }
 
 func (e *Engine) NewMagnet(magnetURI string) error {
-	tt, err := e.client.AddMagnet(magnetURI)
+	// defensive: validate magnet and sanitize trackers
+	safe, err := sanitizeMagnet(magnetURI)
 	if err != nil {
 		return err
 	}
-	return e.newTorrent(tt)
+
+	// recover from possible panics inside the client library
+	defer func() error {
+		if r := recover(); r != nil {
+			return fmt.Errorf("panic in AddMagnet: %v", r)
+		}
+		return nil
+	}()
+
+	tt, err := e.client.AddMagnet(safe)
+	if err != nil {
+		return err
+	}
+	if err := e.newTorrent(tt); err != nil {
+		return err
+	}
+	// persist metadata (magnet) if available
+	if e.persister != nil {
+		ih := tt.InfoHash().HexString()
+		name := tt.Name()
+		desired := "stopped"
+		if e.config.AutoStart {
+			desired = "started"
+		}
+		e.enqueuePersist(persistOp{Op: "upsert", InfoHash: ih, Name: name, Magnet: magnetURI, DesiredState: desired})
+	}
+	return nil
 }
 
 func (e *Engine) NewTorrent(spec *torrent.TorrentSpec) error {
+	// recover from panics in underlying library
+	defer func() error {
+		if r := recover(); r != nil {
+			return fmt.Errorf("panic in AddTorrentSpec: %v", r)
+		}
+		return nil
+	}()
+
 	tt, _, err := e.client.AddTorrentSpec(spec)
 	if err != nil {
 		return err
 	}
-	return e.newTorrent(tt)
+	if err := e.newTorrent(tt); err != nil {
+		return err
+	}
+	if e.persister != nil {
+		ih := tt.InfoHash().HexString()
+		name := tt.Name()
+		desired := "stopped"
+		if e.config.AutoStart {
+			desired = "started"
+		}
+		e.enqueuePersist(persistOp{Op: "upsert", InfoHash: ih, Name: name, TorrentPath: "", DesiredState: desired})
+	}
+	return nil
+}
+
+// sanitizeMagnet removes invalid trackers and validates the magnet URI.
+// It returns a possibly modified magnet URI or an error if the input is invalid.
+func sanitizeMagnet(m string) (string, error) {
+	if strings.TrimSpace(m) == "" {
+		return "", errors.New("empty magnet URI")
+	}
+	if !strings.HasPrefix(m, "magnet:") {
+		return "", errors.New("invalid magnet URI: missing 'magnet:' scheme")
+	}
+	u, err := url.Parse(m)
+	if err != nil {
+		return "", fmt.Errorf("invalid magnet URI: %w", err)
+	}
+	// Ensure xt contains urn:btih
+	q := u.Query()
+	xts := q["xt"]
+	if len(xts) == 0 {
+		return "", errors.New("magnet URI missing xt parameter")
+	}
+	// Sanitize trackers: remove trackers with empty or unknown schemes
+	goodTr := []string{}
+	for _, tr := range q["tr"] {
+		tu, err := url.Parse(tr)
+		if err != nil || tu.Scheme == "" {
+			// skip invalid tracker
+			continue
+		}
+		// keep only http(s) and udp schemes commonly used by trackers
+		switch strings.ToLower(tu.Scheme) {
+		case "http", "https", "udp":
+			goodTr = append(goodTr, tr)
+		default:
+			// skip unknown scheme
+		}
+	}
+	// Rebuild query with sanitized trackers
+	newQ := url.Values{}
+	for _, xt := range xts {
+		newQ.Add("xt", xt)
+	}
+	if dn := q.Get("dn"); dn != "" {
+		newQ.Set("dn", dn)
+	}
+	for _, tr := range goodTr {
+		newQ.Add("tr", tr)
+	}
+	u.RawQuery = newQ.Encode()
+	return u.String(), nil
+}
+
+// SanitizeMagnet is an exported wrapper that returns the sanitized magnet URI
+// along with a list of dropped trackers (for user-facing warnings).
+func SanitizeMagnet(m string) (string, []string, error) {
+	if strings.TrimSpace(m) == "" {
+		return "", nil, errors.New("empty magnet URI")
+	}
+	if !strings.HasPrefix(m, "magnet:") {
+		return "", nil, errors.New("invalid magnet URI: missing 'magnet:' scheme")
+	}
+	u, err := url.Parse(m)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid magnet URI: %w", err)
+	}
+	q := u.Query()
+	if len(q["xt"]) == 0 {
+		return "", nil, errors.New("magnet URI missing xt parameter")
+	}
+	goodTr := []string{}
+	dropped := []string{}
+	for _, tr := range q["tr"] {
+		tu, err := url.Parse(tr)
+		if err != nil || tu.Scheme == "" {
+			dropped = append(dropped, tr)
+			continue
+		}
+		switch strings.ToLower(tu.Scheme) {
+		case "http", "https", "udp":
+			goodTr = append(goodTr, tr)
+		default:
+			dropped = append(dropped, tr)
+		}
+	}
+	newQ := url.Values{}
+	for _, xt := range q["xt"] {
+		newQ.Add("xt", xt)
+	}
+	if dn := q.Get("dn"); dn != "" {
+		newQ.Set("dn", dn)
+	}
+	for _, tr := range goodTr {
+		newQ.Add("tr", tr)
+	}
+	u.RawQuery = newQ.Encode()
+	return u.String(), dropped, nil
 }
 
 func (e *Engine) newTorrent(tt *torrent.Torrent) error {
@@ -103,6 +358,14 @@ func (e *Engine) upsertTorrent(tt *torrent.Torrent) *Torrent {
 	}
 	//update torrent fields using underlying torrent
 	torrent.Update(tt)
+	// Persist new/updated torrent metadata asynchronously
+	if e.persister != nil {
+		desired := "stopped"
+		if torrent.Started {
+			desired = "started"
+		}
+		e.enqueuePersist(persistOp{Op: "upsert", InfoHash: torrent.InfoHash, Name: torrent.Name, DesiredState: desired})
+	}
 	return torrent
 }
 
@@ -175,6 +438,9 @@ func (e *Engine) DeleteTorrent(infohash string) error {
 	ih, _ := str2ih(infohash)
 	if tt, ok := e.client.Torrent(ih); ok {
 		tt.Drop()
+	}
+	if e.persister != nil {
+		e.enqueuePersist(persistOp{Op: "delete", InfoHash: t.InfoHash})
 	}
 	return nil
 }

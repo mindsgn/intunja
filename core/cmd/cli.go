@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -446,6 +447,28 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "up", "k":
+		if len(m.torrentKeys) > 0 {
+			if m.selectedIdx > 0 {
+				m.selectedIdx--
+			} else {
+				m.selectedIdx = 0
+			}
+			m.mainTable.SetCursor(m.selectedIdx)
+		}
+		return m, nil
+
+	case "down", "j":
+		if len(m.torrentKeys) > 0 {
+			if m.selectedIdx < len(m.torrentKeys)-1 {
+				m.selectedIdx++
+			} else {
+				m.selectedIdx = len(m.torrentKeys) - 1
+			}
+			m.mainTable.SetCursor(m.selectedIdx)
+		}
+		return m, nil
+
 	case "s":
 		// Start torrent
 		if len(m.torrentKeys) > 0 && m.selectedIdx >= 0 && m.selectedIdx < len(m.torrentKeys) {
@@ -530,16 +553,17 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.textInput.Blur()
 
 		if strings.Contains(m.inputPrompt, "magnet") {
-			// Validate magnet link format
-			if !strings.HasPrefix(value, "magnet:?") {
-				m.statusMsg = "Invalid magnet link (must start with 'magnet:?')"
+			// Sanitize magnet link and surface warnings about dropped trackers
+			sanitized, dropped, err := engine.SanitizeMagnet(value)
+			if err != nil {
+				m.statusMsg = fmt.Sprintf("Invalid magnet: %v", err)
 				m.statusStyle = m.styles.Error
 				m.inputMode = true
 				m.textInput.Focus()
 				return m, textinput.Blink
 			}
 
-			if err := m.engine.NewMagnet(value); err != nil {
+			if err := m.engine.NewMagnet(sanitized); err != nil {
 				m.statusMsg = fmt.Sprintf("Error adding magnet: %v", err)
 				m.statusStyle = m.styles.Error
 				m.inputMode = true
@@ -547,8 +571,18 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, textinput.Blink
 			}
 
-			m.statusMsg = "Magnet link added successfully!"
-			m.statusStyle = m.styles.Success
+			if len(dropped) > 0 {
+				// show up to 3 dropped trackers in message
+				display := dropped
+				if len(display) > 3 {
+					display = display[:3]
+				}
+				m.statusMsg = fmt.Sprintf("Added with warnings: dropped %d tracker(s): %s", len(dropped), strings.Join(display, ", "))
+				m.statusStyle = m.styles.Error
+			} else {
+				m.statusMsg = "Magnet link added successfully!"
+				m.statusStyle = m.styles.Success
+			}
 
 		} else if strings.Contains(m.inputPrompt, "torrent") {
 			if _, err := os.Stat(value); os.IsNotExist(err) {
@@ -587,6 +621,23 @@ func (m *Model) updateTorrentStats() {
 	for key := range m.torrents {
 		newKeys = append(newKeys, key)
 	}
+	// Sort keys by torrent name (ascending)
+	sort.Slice(newKeys, func(i, j int) bool {
+		ai := newKeys[i]
+		aj := newKeys[j]
+		ta := m.torrents[ai]
+		tb := m.torrents[aj]
+		if ta == nil && tb == nil {
+			return ai < aj
+		}
+		if ta == nil {
+			return false
+		}
+		if tb == nil {
+			return true
+		}
+		return strings.ToLower(ta.Name) < strings.ToLower(tb.Name)
+	})
 	m.torrentKeys = newKeys
 
 	if len(m.torrentKeys) == 0 {
@@ -690,8 +741,24 @@ func Run(configPath string, version string) error {
 		}
 
 		if _, ok := e.(*engine.RemoteEngine); !ok {
-			if err := e.Configure(config); err != nil {
-				return fmt.Errorf("failed to configure engine: %w", err)
+			// attach persister (DB file in download dir)
+			dbPath := filepath.Join(config.DownloadDirectory, "intunja.db")
+			if p, err := engine.NewPersister(dbPath); err == nil {
+				e.AttachPersister(p)
+				// configure engine then rehydrate persisted torrents
+				if err := e.Configure(config); err != nil {
+					return fmt.Errorf("failed to configure engine: %w", err)
+				}
+				e.RehydrateFromPersister()
+				defer func() {
+					e.DetachPersister()
+					p.Close()
+				}()
+			} else {
+				fmt.Printf("warning: could not open persister: %v\n", err)
+				if err := e.Configure(config); err != nil {
+					return fmt.Errorf("failed to configure engine: %w", err)
+				}
 			}
 		} else {
 			if err := e.Configure(config); err != nil {
@@ -744,8 +811,23 @@ func Run(configPath string, version string) error {
 
 	// Only configure local engine; remote engine will forward configure calls
 	if _, ok := e.(*engine.RemoteEngine); !ok {
-		if err := e.Configure(config); err != nil {
-			return fmt.Errorf("failed to configure engine: %w", err)
+		// attach persister (DB file in download dir)
+		dbPath := filepath.Join(config.DownloadDirectory, "intunja.db")
+		if p, err := engine.NewPersister(dbPath); err == nil {
+			e.AttachPersister(p)
+			if err := e.Configure(config); err != nil {
+				return fmt.Errorf("failed to configure engine: %w", err)
+			}
+			e.RehydrateFromPersister()
+			defer func() {
+				e.DetachPersister()
+				p.Close()
+			}()
+		} else {
+			fmt.Printf("warning: could not open persister: %v\n", err)
+			if err := e.Configure(config); err != nil {
+				return fmt.Errorf("failed to configure engine: %w", err)
+			}
 		}
 	} else {
 		// send configuration to remote daemon

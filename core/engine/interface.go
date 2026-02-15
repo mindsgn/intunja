@@ -13,4 +13,7 @@ type EngineInterface interface {
 	DeleteTorrent(string) error
 	StartFile(string, string) error
 	StopFile(string, string) error
+	AttachPersister(*Persister)
+	DetachPersister()
+	RehydrateFromPersister()
 }

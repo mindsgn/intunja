@@ -147,3 +147,10 @@ func (r *RemoteEngine) StopFile(infohash, filepath string) error {
 	}
 	return nil
 }
+
+// AttachPersister is a no-op for RemoteEngine (persistence handled by daemon)
+func (r *RemoteEngine) AttachPersister(p *Persister) {}
+
+func (r *RemoteEngine) DetachPersister() {}
+
+func (r *RemoteEngine) RehydrateFromPersister() {}
