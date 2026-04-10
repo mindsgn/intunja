@@ -423,6 +423,10 @@ func (e *Engine) StartTorrent(infohash string) error {
 	if t.t.Info() != nil {
 		t.t.DownloadAll()
 	}
+	// persist desired state
+	if e.persister != nil {
+		e.enqueuePersist(persistOp{Op: "upsert", InfoHash: t.InfoHash, Name: t.Name, DesiredState: "started"})
+	}
 	return nil
 }
 
@@ -441,6 +445,10 @@ func (e *Engine) StopTorrent(infohash string) error {
 		if f != nil {
 			f.Started = false
 		}
+	}
+	// persist desired state
+	if e.persister != nil {
+		e.enqueuePersist(persistOp{Op: "upsert", InfoHash: t.InfoHash, Name: t.Name, DesiredState: "stopped"})
 	}
 	return nil
 }

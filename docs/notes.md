@@ -1,8 +1,25 @@
 # Technical Documentation: BitTorrent Engine Architecture
 
+Note: this file is the deep technical reference for the engine implementation. For quickstart and onboarding material aimed at new engineers, see `README.md` and `docs/engineering_onboarding.md`.
+
+## 2026-02-15
+
+- Integrated `Persister` into the engine with a background persistence queue.
+- Added exported `SanitizeMagnet` to provide user-facing validation and warnings when adding magnets.
+- TUI: torrent list ordering (by title asc) and explicit up/down navigation highlight improvements.
+
+### 2026-02-15 (persist start/stop)
+
+- Persist `desired_state` when torrents are started or stopped so the engine can resume the user's desired behavior after an application restart.
+- Rehydration now honors `desired_state` when re-adding magnets: torrents persisted as `started` will be resumed after metadata is available; `stopped` torrents are re-added but left stopped.
+- Rehydrate logs now use the standard `log` package for easier integration with daemon logging.
+
+Why this change: persisting only torrent metadata isn't sufficient to resume user intent. Saving `desired_state` ensures that users return to the same active/paused set of torrents after closing and reopening the app. Implementing this at the `StartTorrent`/`StopTorrent` call sites keeps persistence orthogonal to the control flow and minimizes race conditions.
+
+
 ## Overview
 
-This document provides a deep technical analysis of the BitTorrent engine implementation used in the cloud-torrent project. The engine is built on top of the `anacrolix/torrent` library and provides a high-level abstraction for managing torrent downloads with state tracking and configuration management.
+This document provides a deep technical analysis of the BitTorrent engine implementation used in the project. The engine is built on top of the `anacrolix/torrent` library and provides a high-level abstraction for managing torrent downloads with state tracking and configuration management.
 
 ---
 
@@ -748,7 +765,4 @@ This allows callers to distinguish error types.
 ---
 
 ## Conclusion
-
 This engine provides a **pragmatic, production-ready** abstraction over the complex BitTorrent protocol. It prioritizes **simplicity and correctness** over maximum performance, making it ideal for most real-world applications. For specialized high-performance scenarios, the underlying anacrolix library can be used directly.
-
-
