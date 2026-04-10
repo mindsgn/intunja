@@ -59,6 +59,13 @@ go build -o intunja
 
 # Run
 ./intunja
+
+Developer onboarding and tests
+- See the engineering onboarding guide: [docs/engineering_onboarding.md](docs/engineering_onboarding.md)
+- Test plan: [docs/test_plan.md](docs/test_plan.md)
+- Documentation audit: [docs/documentation_audit.md](docs/documentation_audit.md)
+ - Technical notes (deep reference): [docs/notes.md](docs/notes.md)
+ - Mobile roadmap: [docs/mobile_roadmap.md](docs/mobile_roadmap.md)
 ```
 
 ## 🤖 Headless / Non-interactive Mode
