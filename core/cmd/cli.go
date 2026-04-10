@@ -38,9 +38,10 @@ type Model struct {
 	height      int
 
 	// Torrent list
-	torrents    map[string]*engine.Torrent
-	selectedIdx int
-	torrentKeys []string // Ordered list of info hashes
+	torrents      map[string]*engine.Torrent
+	selectedIdx   int
+	selectedInfo  string // Track selected torrent by info hash
+	torrentKeys   []string // Ordered list of info hashes
 
 	// Components
 	mainTable   table.Model
@@ -123,9 +124,9 @@ func NewModel(e engine.EngineInterface) Model {
 		BorderBottom(true).
 		Bold(true)
 	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("#000000")).
-		Background(lipgloss.Color("#00D9FF")).
-		Bold(false)
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(lipgloss.Color("#7C3AED")).
+		Bold(true)
 	t.SetStyles(s)
 
 	// Create progress bar
@@ -609,6 +610,12 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateTorrentStats() {
+	// Preserve current selection
+	var currentSelectedInfo string
+	if m.selectedIdx >= 0 && m.selectedIdx < len(m.torrentKeys) {
+		currentSelectedInfo = m.torrentKeys[m.selectedIdx]
+	}
+
 	m.torrents = m.engine.GetTorrents()
 
 	newKeys := make([]string, 0, len(m.torrents))
@@ -636,14 +643,26 @@ func (m *Model) updateTorrentStats() {
 
 	if len(m.torrentKeys) == 0 {
 		m.selectedIdx = 0
+		m.selectedInfo = ""
 		m.mainTable.SetCursor(0)
 	} else {
-		if m.selectedIdx < 0 {
-			m.selectedIdx = 0
-		} else if m.selectedIdx >= len(m.torrentKeys) {
-			m.selectedIdx = len(m.torrentKeys) - 1
+		// Find the index of the previously selected torrent
+		found := false
+		if currentSelectedInfo != "" {
+			for i, key := range m.torrentKeys {
+				if key == currentSelectedInfo {
+					m.selectedIdx = i
+					m.selectedInfo = key
+					found = true
+					break
+				}
+			}
 		}
-
+		// If not found or no previous selection, default to first item
+		if !found {
+			m.selectedIdx = 0
+			m.selectedInfo = m.torrentKeys[0]
+		}
 		m.mainTable.SetCursor(m.selectedIdx)
 	}
 }
